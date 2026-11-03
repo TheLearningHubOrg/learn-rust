@@ -1,6 +1,18 @@
-/target
+# Rust
+/target/
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock is committed: this crate ships a binary, so builds must be reproducible.
+
+# Editors and OS
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 *.swp
+.DS_Store
+Thumbs.db
+
+# Env files (never commit secrets)
+.env
+.env.*
+!.env.example

@@ -1,45 +1,44 @@
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
-use std::net::SocketAddr;
-use learn_rust::{concurrency::MessageQueue, memory::SafeCounter, SystemMetric};
-
-async fn health_check() -> Json<Value> {
-    Json(json!({
-        "status": "healthy",
-        "runtime": "tokio-async",
-        "edition": "2021",
-        "memory_safety": "guaranteed-by-borrow-checker"
-    }))
-}
-
-async fn get_metrics() -> Json<Vec<SystemMetric>> {
-    let metrics = vec![
-        SystemMetric::new(1, "Zero-Cost Abstractions", 8),
-        SystemMetric::new(2, "Fearless Concurrency with Tokio", 16),
-        SystemMetric::new(3, "Memory Safety Without Garbage Collection", 1),
-    ];
-    Json(metrics)
-}
+use learn_rust::app;
+use learn_rust::config::Config;
+use tokio::net::TcpListener;
 
 #[tokio::main]
-async fn main() {
-    let counter = SafeCounter::new(100);
-    counter.increment();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt().with_target(false).init();
 
-    let (_queue, mut rx) = MessageQueue::new(32);
-    tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            println!("Received message: {}", msg);
-        }
-    });
+    let config = Config::from_env()?;
+    let addr = config.socket_addr();
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!("listening on http://{addr}");
 
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/api/v1/metrics", get(get_metrics));
+    axum::serve(listener, app::router())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    tracing::info!("server stopped");
+    Ok(())
+}
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    println!("⚡ Rust Axum Server running on http://{}", addr);
+/// Resolves on Ctrl+C, or on SIGTERM (what `docker stop` and Kubernetes send).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install the Ctrl+C handler");
+    };
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install the SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+    tracing::info!("shutdown signal received, draining connections");
 }
